@@ -1,0 +1,170 @@
+// ============================================================================
+// Insole Foot Classification — Prisma schema
+// ----------------------------------------------------------------------------
+// This schema is the *source of truth* for the database structure. The
+// runtime ORM is SQLAlchemy (see models.py) and Alembic handles migrations,
+// but this Prisma file is kept in sync so that:
+//   - Frontend/backend type-generation can use `prisma generate`
+//   - Anyone preferring a Prisma-driven workflow can `prisma migrate dev`
+//   - The schema doubles as documentation
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-py"
+  recursive_type_depth = 5
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Patients — anonymised. We never store names; only the patient code (P####).
+// ---------------------------------------------------------------------------
+model Patient {
+  id          String   @id @default(uuid())
+  code        String   @unique                 // e.g. "P1097"
+  age         Int?
+  sex         Sex?
+  height_cm   Float?
+  weight_kg   Float?
+  notes       String?
+
+  classifications Classification[]
+  measurements    Measurement[]
+
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+// ---------------------------------------------------------------------------
+// Classification result — one row per inference run on a patient.
+// ---------------------------------------------------------------------------
+model Classification {
+  id                String   @id @default(uuid())
+  patient           Patient? @relation(fields: [patient_id], references: [id], onDelete: SetNull)
+  patient_id        String?
+
+  predicted_class   FootClass
+  confidence        Float
+  class_probs       Json                // {"Normal Foot": 0.83, ...}
+  severity_band     SeverityBand
+  rule_based_label  FootClass?
+  notes             String?
+
+  // File pointers — stored relative to UPLOAD_DIR
+  lateral_image_path String?
+  top_image_path     String?
+  back_image_path    String?
+
+  // Measurements actually used (provided OR predicted) at decision time
+  calcaneal_inclination_deg   Float?
+  heel_angle_deg              Float?
+  arch_height_cm              Float?
+  kite_angle_deg              Float?
+  first_metatarsal_talus_deg  Float?
+  measurements_were_provided  Boolean @default(false)
+
+  // Insole config readout
+  arch_support_height       Float?
+  heel_cup_depth            Float?
+  medial_post_strength      Float?
+  lateral_wedge_strength    Float?
+  forefoot_cushioning       Float?
+
+  model_version             String?
+  inference_time_ms         Int?
+
+  created_at  DateTime @default(now())
+}
+
+enum FootClass {
+  SEVERE_FLAT_ARCH
+  FLAT_ARCH
+  NORMAL_FOOT
+  HIGH_ARCH
+  SEVERE_HIGH_ARCH
+}
+
+enum SeverityBand {
+  NORMAL
+  MODERATE
+  SEVERE
+  UNKNOWN
+}
+
+// ---------------------------------------------------------------------------
+// Measurements (independent records, e.g. clinician-entered, ground truth)
+// ---------------------------------------------------------------------------
+model Measurement {
+  id          String   @id @default(uuid())
+  patient     Patient  @relation(fields: [patient_id], references: [id], onDelete: Cascade)
+  patient_id  String
+
+  calcaneal_inclination_deg   Float?
+  heel_angle_deg              Float?
+  arch_height_cm              Float?
+  kite_angle_deg              Float?
+  first_metatarsal_talus_deg  Float?
+
+  source      MeasurementSource   @default(CLINICIAN)
+  taken_at    DateTime            @default(now())
+  notes       String?
+}
+
+enum MeasurementSource {
+  CLINICIAN
+  IMAGE_AUTO       // predicted by the model
+  IMPORT_XLSX
+  X_RAY
+}
+
+// ---------------------------------------------------------------------------
+// Training runs — track every experiment.
+// ---------------------------------------------------------------------------
+model TrainingRun {
+  id              String        @id @default(uuid())
+  name            String?
+  status          TrainStatus   @default(QUEUED)
+
+  // Configs (dumped as JSON for flexibility)
+  training_config Json
+  model_config    Json
+
+  // Final metrics
+  best_val_accuracy   Float?
+  test_accuracy       Float?
+  macro_f1            Float?
+  total_epochs        Int?
+  trained_minutes     Int?
+  num_samples_train   Int?
+  num_samples_val     Int?
+  num_samples_test    Int?
+
+  // Per-epoch history (array of {epoch, loss, val_acc, ...})
+  history             Json?
+
+  // Where the resulting checkpoint sits.
+  checkpoint_path     String?
+  model_version       String?
+
+  started_at      DateTime?
+  finished_at     DateTime?
+  created_at      DateTime  @default(now())
+}
+
+enum TrainStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}

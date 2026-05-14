@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+
+# Build outputs
+build/
+dist/
+*.spec
+*.exe
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Data / models — DO NOT COMMIT confidential data
+data/Heel/**/*.jpg
+data/Heel/**/*.jpeg
+data/Heel/**/*.png
+data/Flat/**/*.jpg
+data/Flat/**/*.jpeg
+data/Flat/**/*.png
+data/Normal/**/*.jpg
+data/Normal/**/*.jpeg
+data/Normal/**/*.png
+data/Sheet/*.xlsx
+data/uploads/
+data/processed/*.npy
+data/processed/*.pt
+
+# Model checkpoints
+backend/model/checkpoints/*.pt
+backend/model/checkpoints/*.pth
+backend/model/checkpoints/*.onnx
+backend/model/checkpoints/*.ckpt
+!backend/model/checkpoints/.gitkeep
+
+# Logs
+*.log
+logs/
+runs/
+wandb/
+mlruns/
+
+# OS junk
+Thumbs.db
+__MACOSX/

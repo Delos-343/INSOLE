@@ -1,0 +1,12 @@
+# ============================================================================
+# Training Dockerfile — used by `docker compose run trainer`
+# ----------------------------------------------------------------------------
+# Inherits from the backend image; the only difference is the entrypoint
+# (a training CLI rather than uvicorn). Mount your data folder as a volume.
+# ============================================================================
+
+FROM insole/backend:latest
+
+# Keep everything else identical; just change the command.
+ENTRYPOINT ["python", "scripts/train.py"]
+CMD ["--data-dir", "data", "--epochs", "50"]

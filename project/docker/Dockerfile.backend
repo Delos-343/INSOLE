@@ -1,0 +1,63 @@
+# ============================================================================
+# Backend / API Dockerfile
+# ----------------------------------------------------------------------------
+# Multi-stage:
+#   1. `base`   - installs system + python deps once (cached layer)
+#   2. `runtime`- copies source code, runs uvicorn
+# ============================================================================
+
+# ---------- base ----------
+FROM python:3.12-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /workspace
+
+# System packages: postgres client lib for psycopg2, libgl/libglib for OpenCV.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only requirements first so the layer caches.
+COPY requirements.txt /workspace/requirements.txt
+
+# Install CPU-only torch first from PyTorch's own index (much smaller than
+# the CUDA wheels). The `--extra-index-url` tells pip to *also* consider
+# PyPI for everything else.
+RUN pip install --upgrade pip \
+    && pip install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision \
+    && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+        -r /workspace/requirements.txt
+
+# ---------- runtime ----------
+FROM base AS runtime
+
+COPY backend/ /workspace/backend/
+COPY scripts/ /workspace/scripts/
+COPY alembic.ini /workspace/alembic.ini
+
+# Non-root user.
+RUN useradd -ms /bin/bash insole && chown -R insole:insole /workspace
+USER insole
+
+ENV PYTHONPATH=/workspace
+
+EXPOSE 8000
+
+# Healthcheck.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://localhost:8000/api/health || exit 1
+
+CMD ["uvicorn", "backend.server.main:app", "--host", "0.0.0.0", "--port", "8000"]

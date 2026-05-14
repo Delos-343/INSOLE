@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insole-foot-classification"
+version = "0.1.0"
+description = "AI-powered foot classification system for insole recommendation"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Insole Foot Classification Team" }]
+license = { text = "Proprietary" }
+keywords = ["medical imaging", "foot classification", "insole", "ai", "pytorch"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "backend*"]
+exclude = ["tests*", "data*", "docker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "RET", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --tb=short --strict-markers"

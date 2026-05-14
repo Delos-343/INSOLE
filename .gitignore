@@ -1,0 +1,11 @@
+# dataset
+data/
+dataset/
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tif
+*.tiff
+*.csv
+*.xlsx
