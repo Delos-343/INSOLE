@@ -19,10 +19,7 @@ def save_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    torch.save(
-        {"state_dict": model.state_dict(), "metadata": metadata or {}},
-        tmp,
-    )
+    torch.save({"state_dict": model.state_dict(), "metadata": metadata or {}}, tmp)
     tmp.replace(path)
     logger.debug("Saved checkpoint -> {}", path)
 
@@ -38,36 +35,47 @@ def load_checkpoint(
 
 
 def find_latest_checkpoint(checkpoint_dir: str | Path) -> Path | None:
-    """Return the most-recently-modified usable checkpoint in a directory.
+    """Return the best available checkpoint.
 
-    Resolution order, newest first:
-      1. ``best.pt``                (canonical name)
-      2. ``run_<uuid>.pt``          (renamed after a completed training run)
-      3. ``epoch_<n>.pt``           (periodic snapshots)
-
-    Files are ranked by modification time so the most recent training
-    output always wins, regardless of naming. Returns None if the
-    directory has no checkpoint at all (caller must handle this — we no
-    longer silently fall back to random weights).
+    PRIORITY (not just mtime — that bug caused epoch_20.pt to be picked
+    over the genuinely-best best.pt):
+      1. best.pt                — the early-stopping best, ALWAYS preferred
+      2. run_<uuid>.pt          — archived completed-run copies, newest first
+      3. epoch_<n>.pt           — periodic snapshots, highest epoch first
     """
     d = Path(checkpoint_dir)
     if not d.exists():
         return None
 
-    candidates: list[Path] = []
-    for pattern in ("best.pt", "run_*.pt", "epoch_*.pt", "*.pt"):
-        candidates.extend(d.glob(pattern))
+    best = d / "best.pt"
+    if best.is_file() and best.stat().st_size > 0:
+        return best
 
-    # Deduplicate while preserving discovery, then sort by mtime (newest first).
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for c in candidates:
-        if c not in seen and c.is_file() and c.stat().st_size > 0:
-            seen.add(c)
-            unique.append(c)
+    runs = sorted(
+        (p for p in d.glob("run_*.pt") if p.stat().st_size > 0),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if runs:
+        return runs[0]
 
-    if not unique:
-        return None
+    def _epoch_num(p: Path) -> int:
+        try:
+            return int(p.stem.split("_")[-1])
+        except (ValueError, IndexError):
+            return -1
 
-    unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return unique[0]
+    epochs = sorted(
+        (p for p in d.glob("epoch_*.pt") if p.stat().st_size > 0),
+        key=_epoch_num,
+        reverse=True,
+    )
+    if epochs:
+        return epochs[0]
+
+    any_pt = sorted(
+        (p for p in d.glob("*.pt") if p.stat().st_size > 0),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return any_pt[0] if any_pt else None

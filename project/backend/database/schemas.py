@@ -9,12 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.database.models import FootClass, SeverityBand, TrainStatus
 
 
-# ---------------------------------------------------------------------------
-# Measurements
-# ---------------------------------------------------------------------------
 class MeasurementsIn(BaseModel):
-    """Optional measurements supplied at inference time."""
-
     calcaneal_inclination_deg: float | None = None
     heel_angle_deg:            float | None = None
     arch_height_cm:            float | None = None
@@ -25,9 +20,6 @@ class MeasurementsIn(BaseModel):
         return any(v is not None for v in self.model_dump().values())
 
 
-# ---------------------------------------------------------------------------
-# Classification I/O
-# ---------------------------------------------------------------------------
 class InsoleConfigOut(BaseModel):
     arch_support_height:    float
     heel_cup_depth:         float
@@ -47,7 +39,7 @@ class ClassificationOut(BaseModel):
     severity_band: str
     rule_based_label: str
 
-    measurements_predicted: dict[str, float]
+    measurements_predicted: dict[str, float]            # == measurements_used
     measurements_provided:  dict[str, float | None]
 
     insole_configuration: InsoleConfigOut
@@ -55,10 +47,13 @@ class ClassificationOut(BaseModel):
     inference_time_ms: int | None = None
     model_version: str | None = None
 
+    # --- Measurement-first additions ---
+    # 'measured'         -> authoritative, deterministic rule on clinician input
+    # 'image_estimated'  -> assistive, model-estimated arch height, lower trust
+    classification_source: str = "measured"
+    measurements_estimated: dict[str, float] = Field(default_factory=dict)
 
-# ---------------------------------------------------------------------------
-# Patient / DB I/O
-# ---------------------------------------------------------------------------
+
 class PatientIn(BaseModel):
     code: str
     age: int | None = None
@@ -74,26 +69,16 @@ class PatientOut(PatientIn):
     created_at: datetime
 
 
-# ---------------------------------------------------------------------------
-# Training
-# ---------------------------------------------------------------------------
 class TrainingRequest(BaseModel):
-    """Hyper-parameters submitted from the GUI's Training tab."""
-
     name: str | None = None
-
     batch_size: int = 16
     num_epochs: int = 50
     learning_rate: float = 1e-4
     image_size: int = 256
     use_augmentation: bool = True
     use_generative_branch: bool = True
-
     train_split: float = 0.8
     val_split: float = 0.1
-
-    # Optional override for data location.
-    # Leave None to use the container default (/workspace/data via WORKDIR).
     data_dir: str | None = None
 
 
@@ -109,18 +94,13 @@ class TrainingStatusOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     checkpoint_path: str | None
-    # Per-epoch metrics dictionaries, appended live by the trainer's
-    # progress callback. The GUI polls this list and emits new entries.
     history: list[dict] | None = None
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
 class HealthOut(BaseModel):
     status: str = "ok"
     service: str = "insole-foot-classification"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     model_loaded: bool
     device: str
     db_connected: bool
