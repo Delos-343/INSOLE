@@ -1,15 +1,18 @@
 """
-ResultsPanel — right-hand results pane.
+ResultsPanel (revision 2026-05).
 
-Now leads with a PROVENANCE BANNER that makes the trust level
-unmistakable:
+Provenance banner now has three states:
+  * SHEET (green)      — measurements looked up from the consolidated
+                         records; deterministic dual-rule classification.
+  * BOUNDARY (blue)    — found in sheet, but the arch-height and heel-angle
+                         rules disagree by one class; headline is the
+                         authoritative arch-height class, flagged for review.
+  * ESTIMATED (amber)  — patient not in the sheet; arch height estimated
+                         from images; assistive only.
 
-  • MEASURED (green)   — deterministic classification from clinician
-                         measurements. Authoritative. Confidence 100%.
-  • ESTIMATED (amber)  — arch height was estimated from images because no
-                         measurement was supplied. Assistive only;
-                         diagnostic testing showed image-only estimates
-                         are unreliable for this dataset.
+The empty-measurements bug (revision B2) is fixed: when source is "sheet"
+the looked-up values are always shown; when "image_estimated" they are
+shown tagged (est.). They are never blank when a result exists.
 """
 
 from __future__ import annotations
@@ -29,12 +32,9 @@ from PySide6.QtWidgets import (
 from app.ui.theme.colors import PALETTE as P
 
 
-def _severity_color(band: str) -> str:
-    return {
-        "normal": P.severity_normal,
-        "moderate": P.severity_moderate,
-        "severe": P.severity_severe,
-    }.get(band, P.text_muted)
+def _sev_color(b: str) -> str:
+    return {"normal": P.severity_normal, "moderate": P.severity_moderate,
+            "severe": P.severity_severe}.get(b, P.text_muted)
 
 
 class ResultsPanel(QFrame):
@@ -42,118 +42,125 @@ class ResultsPanel(QFrame):
         super().__init__(parent)
         self.setObjectName("resultsPanel")
         self.setStyleSheet(
-            f"#resultsPanel {{ background-color: {P.bg_secondary}; "
-            f"border: 1px solid {P.border}; border-radius: 12px; }}"
+            f"#resultsPanel{{background:{P.bg_secondary};"
+            f"border:1px solid {P.border};border-radius:12px;}}"
         )
         self._build()
         self.clear()
 
-    def _build(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(20, 20, 20, 20)
-        outer.setSpacing(12)
+    def _build(self):
+        o = QVBoxLayout(self)
+        o.setContentsMargins(20, 20, 20, 20)
+        o.setSpacing(12)
+        t = QLabel("Results")
+        t.setObjectName("subtitleLabel")
+        o.addWidget(t)
 
-        title = QLabel("Results")
-        title.setObjectName("subtitleLabel")
-        outer.addWidget(title)
-
-        # ---- Provenance banner (the trust signal) ----
         self.banner = QLabel("—")
         self.banner.setWordWrap(True)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.banner.setMinimumHeight(46)
-        outer.addWidget(self.banner)
+        o.addWidget(self.banner)
 
         self.headline = QLabel("—")
         self.headline.setObjectName("titleLabel")
-        outer.addWidget(self.headline)
+        o.addWidget(self.headline)
 
-        chip_row = QHBoxLayout()
-        chip_row.setSpacing(10)
-        self.severity_chip = QLabel("—")
-        self.severity_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.severity_chip.setMinimumWidth(90)
-        self.severity_chip.setStyleSheet(self._chip_qss(P.text_muted))
-        chip_row.addWidget(self.severity_chip)
-        self.confidence_label = QLabel("Confidence —")
-        self.confidence_label.setStyleSheet(
-            f"color: {P.text_secondary}; font-size: 13px;"
-        )
-        chip_row.addWidget(self.confidence_label)
-        chip_row.addStretch()
-        outer.addLayout(chip_row)
+        chips = QHBoxLayout()
+        chips.setSpacing(10)
+        self.sev_chip = QLabel("—")
+        self.sev_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sev_chip.setMinimumWidth(90)
+        self.sev_chip.setStyleSheet(self._chip(P.text_muted))
+        chips.addWidget(self.sev_chip)
+        self.conf = QLabel("Confidence —")
+        self.conf.setStyleSheet(f"color:{P.text_secondary};font-size:13px;")
+        chips.addWidget(self.conf)
+        chips.addStretch()
+        o.addLayout(chips)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         body = QWidget()
-        body_l = QVBoxLayout(body)
-        body_l.setContentsMargins(0, 4, 0, 0)
-        body_l.setSpacing(16)
+        b = QVBoxLayout(body)
+        b.setContentsMargins(0, 4, 0, 0)
+        b.setSpacing(16)
+
+        # Dual-rule summary
+        self.rules_box = QGroupBox("Classification rules")
+        rl = QVBoxLayout(self.rules_box)
+        rl.setContentsMargins(14, 24, 14, 14)
+        rl.setSpacing(6)
+        self.arch_lbl = QLabel("Arch-height rule: —")
+        self.heel_lbl = QLabel("Heel-angle rule: —")
+        for w in (self.arch_lbl, self.heel_lbl):
+            w.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            rl.addWidget(w)
+        b.addWidget(self.rules_box)
 
         # Probabilities
-        probs_box = QGroupBox("Class probabilities")
-        probs_l = QVBoxLayout(probs_box)
-        probs_l.setContentsMargins(14, 24, 14, 14)
-        probs_l.setSpacing(6)
-        self.prob_rows: dict[str, tuple[QLabel, QProgressBar, QLabel]] = {}
-        for cls in ("Severe Flat Arch", "Flat Arch", "Normal Foot",
-                    "High Arch", "Severe High Arch"):
-            row = QHBoxLayout()
-            row.setSpacing(10)
-            name = QLabel(cls)
-            name.setMinimumWidth(140)
-            name.setStyleSheet(f"color: {P.text_secondary}; font-size: 12px;")
+        pb = QGroupBox("Class probabilities")
+        pl = QVBoxLayout(pb)
+        pl.setContentsMargins(14, 24, 14, 14)
+        pl.setSpacing(6)
+        self.prob_rows = {}
+        for c in ("Severe Flat Arch", "Flat Arch", "Normal Foot",
+                  "High Arch", "Severe High Arch"):
+            r = QHBoxLayout()
+            r.setSpacing(10)
+            n = QLabel(c)
+            n.setMinimumWidth(140)
+            n.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
             bar = QProgressBar()
             bar.setRange(0, 100)
-            bar.setValue(0)
             bar.setTextVisible(False)
             bar.setFixedHeight(6)
-            val = QLabel("0.0%")
-            val.setMinimumWidth(50)
-            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            val.setStyleSheet(f"color: {P.text_primary};")
-            row.addWidget(name)
-            row.addWidget(bar, 1)
-            row.addWidget(val)
-            probs_l.addLayout(row)
-            self.prob_rows[cls] = (name, bar, val)
-        body_l.addWidget(probs_box)
+            v = QLabel("0.0%")
+            v.setMinimumWidth(50)
+            v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            v.setStyleSheet(f"color:{P.text_primary};")
+            r.addWidget(n)
+            r.addWidget(bar, 1)
+            r.addWidget(v)
+            pl.addLayout(r)
+            self.prob_rows[c] = (bar, v)
+        b.addWidget(pb)
 
-        # Measurements used (with per-row provenance tag)
-        self.meas_box = QGroupBox("Measurements used for classification")
-        meas_l = QVBoxLayout(self.meas_box)
-        meas_l.setContentsMargins(14, 24, 14, 14)
-        meas_l.setSpacing(4)
-        self.meas_labels: dict[str, QLabel] = {}
-        self._meas_keys = [
+        # Measurements (always populated when a result exists)
+        self.meas_box = QGroupBox("Measurements")
+        ml = QVBoxLayout(self.meas_box)
+        ml.setContentsMargins(14, 24, 14, 14)
+        ml.setSpacing(4)
+        self.meas_labels = {}
+        self._mk = [
             ("calcaneal_inclination_deg", "Calcaneal inclination", "°"),
             ("heel_angle_deg", "Heel angle", "°"),
             ("arch_height_cm", "Arch height", "cm"),
             ("kite_angle_deg", "Kite angle", "°"),
             ("first_metatarsal_talus_deg", "1st metatarsal–talus", "°"),
         ]
-        for k, lbl, unit in self._meas_keys:
+        for k, lbl, unit in self._mk:
             row = QHBoxLayout()
             row.setSpacing(8)
-            l = QLabel(lbl)
-            l.setStyleSheet(f"color: {P.text_secondary}; font-size: 12px;")
-            v = QLabel(f"— {unit}")
-            v.setAlignment(Qt.AlignmentFlag.AlignRight)
-            v.setStyleSheet(f"color: {P.text_primary}; font-size: 13px;")
-            self.meas_labels[k] = v
-            row.addWidget(l)
+            a = QLabel(lbl)
+            a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
+            val = QLabel(f"— {unit}")
+            val.setAlignment(Qt.AlignmentFlag.AlignRight)
+            val.setStyleSheet(f"color:{P.text_primary};font-size:13px;")
+            self.meas_labels[k] = val
+            row.addWidget(a)
             row.addStretch()
-            row.addWidget(v)
-            meas_l.addLayout(row)
-        body_l.addWidget(self.meas_box)
+            row.addWidget(val)
+            ml.addLayout(row)
+        b.addWidget(self.meas_box)
 
         # Insole config
-        insole_box = QGroupBox("Recommended insole configuration")
-        in_l = QVBoxLayout(insole_box)
-        in_l.setContentsMargins(14, 24, 14, 14)
-        in_l.setSpacing(6)
-        self.insole_rows: dict[str, QProgressBar] = {}
+        ib = QGroupBox("Recommended insole configuration")
+        il = QVBoxLayout(ib)
+        il.setContentsMargins(14, 24, 14, 14)
+        il.setSpacing(6)
+        self.insole_rows = {}
         for k, lbl in [
             ("arch_support_height", "Arch support height"),
             ("heel_cup_depth", "Heel cup depth"),
@@ -161,126 +168,138 @@ class ResultsPanel(QFrame):
             ("lateral_wedge_strength", "Lateral wedge strength"),
             ("forefoot_cushioning", "Forefoot cushioning"),
         ]:
-            row = QHBoxLayout()
-            row.setSpacing(10)
-            l = QLabel(lbl)
-            l.setMinimumWidth(160)
-            l.setStyleSheet(f"color: {P.text_secondary}; font-size: 12px;")
+            r = QHBoxLayout()
+            r.setSpacing(10)
+            a = QLabel(lbl)
+            a.setMinimumWidth(160)
+            a.setStyleSheet(f"color:{P.text_secondary};font-size:12px;")
             bar = QProgressBar()
             bar.setRange(0, 100)
-            bar.setValue(0)
             bar.setTextVisible(False)
             bar.setFixedHeight(6)
-            row.addWidget(l)
-            row.addWidget(bar, 1)
-            in_l.addLayout(row)
+            r.addWidget(a)
+            r.addWidget(bar, 1)
+            il.addLayout(r)
             self.insole_rows[k] = bar
-        body_l.addWidget(insole_box)
+        b.addWidget(ib)
 
-        self.notes_label = QLabel("")
-        self.notes_label.setWordWrap(True)
-        self.notes_label.setStyleSheet(
-            f"color: {P.text_muted}; font-size: 11px; font-style: italic;"
+        self.notes = QLabel("")
+        self.notes.setWordWrap(True)
+        self.notes.setStyleSheet(
+            f"color:{P.text_muted};font-size:11px;font-style:italic;"
         )
-        body_l.addWidget(self.notes_label)
-        body_l.addStretch()
+        b.addWidget(self.notes)
+        b.addStretch()
         scroll.setWidget(body)
-        outer.addWidget(scroll, 1)
+        o.addWidget(scroll, 1)
 
-    def _chip_qss(self, color: str) -> str:
-        return (
-            f"background-color: {color}22; color: {color}; font-weight: 700; "
-            f"font-size: 10px; letter-spacing: 2px; text-transform: uppercase; "
-            f"border: 1px solid {color}66; border-radius: 999px; padding: 4px 12px;"
-        )
+    def _chip(self, c):
+        return (f"background:{c}22;color:{c};font-weight:700;font-size:10px;"
+                f"letter-spacing:2px;text-transform:uppercase;"
+                f"border:1px solid {c}66;border-radius:999px;padding:4px 12px;")
 
-    def _banner_qss(self, color: str) -> str:
-        return (
-            f"background-color: {color}1F; color: {color}; "
-            f"border: 1px solid {color}80; border-radius: 8px; "
-            f"padding: 10px 14px; font-size: 12px; font-weight: 600;"
-        )
+    def _ban(self, c):
+        return (f"background:{c}1F;color:{c};border:1px solid {c}80;"
+                f"border-radius:8px;padding:10px 14px;font-size:12px;"
+                f"font-weight:600;")
 
-    def clear(self) -> None:
+    def clear(self):
         self.banner.setText("Awaiting input")
-        self.banner.setStyleSheet(self._banner_qss(P.text_muted))
+        self.banner.setStyleSheet(self._ban(P.text_muted))
         self.headline.setText("—")
-        self.severity_chip.setText("—")
-        self.severity_chip.setStyleSheet(self._chip_qss(P.text_muted))
-        self.confidence_label.setText("Confidence —")
-        for _, bar, val in self.prob_rows.values():
+        self.sev_chip.setText("—")
+        self.sev_chip.setStyleSheet(self._chip(P.text_muted))
+        self.conf.setText("Confidence —")
+        self.arch_lbl.setText("Arch-height rule: —")
+        self.heel_lbl.setText("Heel-angle rule: —")
+        for bar, v in self.prob_rows.values():
             bar.setValue(0)
-            val.setText("0.0%")
+            v.setText("0.0%")
         for v in self.meas_labels.values():
             v.setText("—")
         for bar in self.insole_rows.values():
             bar.setValue(0)
-        self.notes_label.setText("")
+        self.notes.setText("")
 
-    def set_result(self, result: dict) -> None:
-        source = result.get("classification_source", "measured")
-        cls = result.get("predicted_class", "—")
-        conf = float(result.get("confidence", 0.0))
-        severity = result.get("severity_band", "unknown")
+    def set_result(self, r: dict):
+        src = r.get("classification_source", "sheet")
+        cls = r.get("predicted_class", "—")
+        conf = float(r.get("confidence", 0.0))
+        sev = r.get("severity_band", "unknown")
+        agree = r.get("rules_agree", True)
 
-        if source == "measured":
+        if src == "sheet" and agree:
             self.banner.setText(
-                "✓  MEASURED — authoritative result.\n"
-                "Classified deterministically from the provided clinical "
-                "measurements using the project's arch-height bands."
+                "✓  SHEET — authoritative result.\n"
+                "Measurements retrieved from the consolidated records; "
+                "deterministic dual-rule classification."
             )
-            self.banner.setStyleSheet(self._banner_qss(P.success))
-            self.meas_box.setTitle("Measurements used (clinician-provided)")
+            self.banner.setStyleSheet(self._ban(P.success))
+            self.meas_box.setTitle("Measurements (from consolidated records)")
+        elif src == "sheet" and not agree:
+            self.banner.setText(
+                "⚑  BOUNDARY — review.\n"
+                "Found in records, but the arch-height and heel-angle rules "
+                "disagree by one class. Headline is the authoritative "
+                "arch-height class."
+            )
+            self.banner.setStyleSheet(self._ban(P.accent))
+            self.meas_box.setTitle("Measurements (from consolidated records)")
         else:
             self.banner.setText(
-                "⚠  ESTIMATED — assistive only, NOT a clinical measurement.\n"
-                "No arch-height value was supplied, so it was estimated from "
-                "the images. Image-only estimates are unreliable for this "
-                "dataset — confirm with a real measurement before use."
+                "⚠  ESTIMATED — assistive only, NOT authoritative.\n"
+                "Patient not in the consolidated records; arch height "
+                "estimated from images. Confirm before use."
             )
-            self.banner.setStyleSheet(self._banner_qss(P.warning))
-            self.meas_box.setTitle("Measurements used (model-estimated)")
+            self.banner.setStyleSheet(self._ban(P.warning))
+            self.meas_box.setTitle("Measurements (model-estimated)")
 
         self.headline.setText(cls)
-        self.confidence_label.setText(f"Confidence {conf * 100:0.1f}%")
-        color = _severity_color(severity)
-        self.severity_chip.setText(severity)
-        self.severity_chip.setStyleSheet(self._chip_qss(color))
+        self.conf.setText(f"Confidence {conf*100:0.1f}%")
+        col = _sev_color(sev)
+        self.sev_chip.setText(sev)
+        self.sev_chip.setStyleSheet(self._chip(col))
 
-        probs = result.get("class_probabilities") or {}
-        for name, (_, bar, val) in self.prob_rows.items():
+        ac = r.get("arch_class")
+        hc = r.get("heel_class")
+        self.arch_lbl.setText(
+            f"Arch-height rule (authoritative): {ac or '—'}"
+        )
+        self.heel_lbl.setText(
+            f"Heel-angle rule (corroborating): {hc or 'n/a'}"
+        )
+        self.heel_lbl.setStyleSheet(
+            f"color:{P.danger if (hc and not agree) else P.text_secondary};"
+            f"font-size:12px;"
+        )
+
+        probs = r.get("class_probabilities") or {}
+        for name, (bar, v) in self.prob_rows.items():
             p = float(probs.get(name, 0.0))
-            bar.setValue(int(round(p * 100)))
-            val.setText(f"{p * 100:0.1f}%")
-            chunk = color if name == cls else P.accent_muted
+            bar.setValue(int(round(p*100)))
+            v.setText(f"{p*100:0.1f}%")
+            chunk = col if name == cls else P.accent_muted
             bar.setStyleSheet(
-                f"QProgressBar {{ background-color: {P.bg_tertiary}; border: none; "
-                f"border-radius: 3px; }}"
-                f"QProgressBar::chunk {{ background-color: {chunk}; "
-                f"border-radius: 3px; }}"
+                f"QProgressBar{{background:{P.bg_tertiary};border:none;"
+                f"border-radius:3px;}}"
+                f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}"
             )
 
-        units = {
-            "calcaneal_inclination_deg": "°",
-            "heel_angle_deg": "°",
-            "arch_height_cm": "cm",
-            "kite_angle_deg": "°",
-            "first_metatarsal_talus_deg": "°",
-        }
-        used = result.get("measurements_predicted") or {}
-        provided = result.get("measurements_provided") or {}
-        for key, lbl in self.meas_labels.items():
-            v = used.get(key)
-            unit = units[key]
-            if v is None:
-                lbl.setText(f"— {unit}")
-                continue
-            tag = " (measured)" if provided.get(key) is not None else " (est.)"
-            lbl.setText(f"{v:.2f} {unit}{tag}")
+        units = {"calcaneal_inclination_deg": "°", "heel_angle_deg": "°",
+                 "arch_height_cm": "cm", "kite_angle_deg": "°",
+                 "first_metatarsal_talus_deg": "°"}
+        used = r.get("measurements_used") or {}
+        tag = "" if src == "sheet" else " (est.)"
+        for k, val_lbl in self.meas_labels.items():
+            unit = units[k]
+            if k in used and used[k] is not None:
+                val_lbl.setText(f"{float(used[k]):.2f} {unit}{tag}")
+            else:
+                val_lbl.setText(f"— {unit}")
 
-        insole = result.get("insole_configuration") or {}
-        for key, bar in self.insole_rows.items():
-            bar.setValue(int(round(float(insole.get(key, 0.0)) * 100)))
+        insole = r.get("insole_configuration") or {}
+        for k, bar in self.insole_rows.items():
+            bar.setValue(int(round(float(insole.get(k, 0.0))*100)))
 
-        notes = result.get("notes") or []
-        self.notes_label.setText("• " + "\n• ".join(notes) if notes else "")
+        notes = r.get("notes") or []
+        self.notes.setText("• " + "\n• ".join(notes) if notes else "")
