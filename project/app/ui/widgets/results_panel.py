@@ -362,7 +362,16 @@ class ResultsPanel(QFrame):
         units = {"calcaneal_inclination_deg": "°", "heel_angle_deg": "°",
                  "arch_height_cm": "cm", "kite_angle_deg": "°",
                  "first_metatarsal_talus_deg": "°"}
-        used = r.get("measurements_used") or {}
+        # The API serialises the looked-up/estimated values as
+        # 'measurements_predicted'. Older paths used 'measurements_used'.
+        # Read whichever is populated so a key rename on either side
+        # cannot silently blank this card again.
+        used = (
+            r.get("measurements_predicted")
+            or r.get("measurements_used")
+            or r.get("measurements_estimated")
+            or {}
+        )
         tag = "" if src == "sheet" else " (est.)"
         for k, val_lbl in self.meas_labels.items():
             unit = units[k]
