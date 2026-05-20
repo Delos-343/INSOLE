@@ -107,8 +107,8 @@ class ImageDropZone(QFrame):
 
     def clear(self) -> None:
         self._image_path = None
-        self.preview.setText("INSERT\nIMAGE")
         self.preview.setPixmap(QPixmap())
+        self.preview.setText("INSERT\nIMAGE")
         self.setProperty("filled", False)
         self.remove_btn.hide()
         self._refresh_style()
