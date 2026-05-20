@@ -1,111 +1,95 @@
 # Insole Foot Classification
 
-> Measurement-first foot-classification system for insole recommendation.
-> Deterministic clinical classification, with an assistive image-based
-> estimator, a native desktop GUI, a FastAPI service, a PostgreSQL store,
-> and Docker orchestration.
+> Sheet-lookup, dual-rule deterministic foot-classification system for
+> insole recommendation. Native desktop GUI (PySide6), FastAPI backend,
+> PostgreSQL store, Docker orchestration.
 
 ---
 
 ## What it does
 
-Given an optional set of clinical measurements and up to **three foot
-images** (lateral / top / back), the system:
+Given a patient code (and optional images), the system:
 
-1. **Classifies the foot into one of five clinical categories** — Severe
-   Flat Arch, Flat Arch, Normal Foot, High Arch, Severe High Arch —
-   defined by the project's arch-height bands (cm):
-   Severe Flat `< 2.7` · Flat `2.7–3.5` · Normal `3.6–5.5` ·
-   High `5.6–6.4` · Severe High `> 6.4`.
-2. Emits a **recommended insole configuration** (arch support height,
-   heel cup depth, medial post strength, lateral wedge strength,
-   forefoot cushioning) from the generative branch.
-3. Persists every result to PostgreSQL with full audit metadata,
-   **including which path produced it** (measured vs estimated).
+1. **Looks up the patient's clinical measurements** in the consolidated
+   records (`data/Sheet/measurements_consolidated.xlsx`) by patient code.
+2. **Classifies into one of five clinical categories** — Severe Flat
+   Arch, Flat Arch, Normal Foot, High Arch, Severe High Arch — using
+   two independent deterministic rules:
+   - **Arch-height rule (authoritative):** centimetre bands per the brief
+     (Severe Flat `< 2.7` · Flat `2.7–3.5` · Normal `3.6–5.5` · High
+     `5.6–6.4` · Severe High `> 6.4`).
+   - **Heel-angle rule (corroborating):** degree bands per the revision
+     spec (Normal `0–5°` · Flat `> 5°` · Severe Flat `> 10°` · High `< 0°`
+     · Severe High `< -5°`).
+3. **Emits a recommended insole configuration** from the generative
+   branch (arch support, heel cup depth, medial post, lateral wedge,
+   forefoot cushioning).
+4. **Persists every result** with full provenance.
 
-### Two paths, clearly distinguished
+### Three result states, clearly distinguished
 
-| Path | Trigger | Trust | Confidence |
+| State | When | Authority | Confidence |
 |---|---|---|---|
-| **Measured** (authoritative) | Arch-height measurement supplied | Deterministic; exact by construction | 100% |
-| **Estimated** (assistive) | No measurement — estimated from images | Approximate; **must be confirmed clinically** | Honest, sub-100% |
+| **SHEET** (green) | Patient resolved; rules agree | Authoritative | 100% |
+| **BOUNDARY** (blue) | Patient resolved; rules disagree by one class | Authoritative, arch-height wins; flagged for review | 100% |
+| **ESTIMATED** (amber) | Patient absent from records | Assistive, **non-authoritative** | Honest sub-100% |
 
-The measured path applies the project's arch-height bands directly. It
-does **not** consult the neural network's class output, so it is exact by
-construction. The estimated path uses the model to estimate arch height
-from images and is **always flagged in the UI as non-authoritative**.
+> Manual measurement entry is intentionally removed. Measurements come
+> from the consolidated records by patient code, not by hand.
 
-> **Why measurement-first?** The original brief targeted ≥90%
-> *image-based* accuracy. Empirical diagnostics during development showed
-> arch height is **not visually recoverable** from the supplied photo
-> views (image-only accuracy ≈ 33%, with 0% recall on Normal and High),
-> while a deterministic rule on the measurement scores ≈ 100%. The
-> success criterion was formally revised accordingly. See
-> `Success_Criterion_Revision.docx` and `Verification_and_Test_Report.docx`
-> in the delivery package, both reproducible via the diagnostic scripts.
+> **Why measurement-first?** Diagnostics showed arch height is not
+> visually recoverable from the supplied photo views (image-only ≈ 33%),
+> while a deterministic rule on the measurement is ≈ 100%. The success
+> criterion was formally revised. See `Success_Criterion_Revision.docx`.
 
 ---
 
 ## Architecture
 
 ```
-                ┌───────────────────────────────────────────┐
-                │           Desktop GUI (PySide6)           │
-                │  ┌─────────────────┐  ┌───────────────┐   │
-                │  │ Classification  │  │   Training    │   │
-                │  │      tab        │  │      tab      │   │
-                │  └────────┬────────┘  └────────┬──────┘   │
-                └───────────┼────────────────────┼──────────┘
-                            │ HTTP (Docker backend; local fallback)
-                            ▼                              ▼
-                ┌───────────────────────────┐   ┌──────────────────────┐
-                │   FastAPI service         │   │  Training (threaded, │
-                │  /api/classify            │   │  in backend container)│
-                │  /api/training/runs       │   └──────────┬───────────┘
-                │  /api/data/summary        │              │
-                │  /api/patients            │              │
-                └─────────┬─────────────────┘              │
-                          │                                 │
-              ┌───────────┴───────────┐         ┌──────────┴─────────┐
-              ▼                       ▼         ▼                    ▼
-       ┌─────────────┐        ┌─────────────┐  ┌──────────────┐  ┌────────┐
-       │ Predictor   │        │ Repositories│  │ Multi-view   │  │ Data   │
-       │ measurement │        │ (SQLAlchemy)│  │ network      │  │ loader │
-       │ -first      │        └──────┬──────┘  └──────┬───────┘  └────┬───┘
-       └──────┬──────┘               │                │               │
-              │ rule on bands        ▼                ▼               ▼
-              │ (authoritative) ┌─────────────────────────────────────────┐
-       ┌─────────────┐          │              PostgreSQL                 │
-       │ Checkpoints │          │  patients · classifications ·           │
-       │  (volume)   │          │  measurements · training_runs           │
-       └─────────────┘          └─────────────────────────────────────────┘
+                ┌────────────────────────────────────────────┐
+                │           Desktop GUI (PySide6)            │
+                │  ┌─────────────────┐  ┌────────────────┐   │
+                │  │ Classification  │  │   Training     │   │
+                │  └────────┬────────┘  └───────┬────────┘   │
+                └───────────┼───────────────────┼────────────┘
+                            │ HTTP (Docker backend)
+                            ▼                   ▼
+                ┌──────────────────────┐  ┌──────────────────────┐
+                │  FastAPI service     │  │  Training (threaded) │
+                │  /api/classify       │  └──────────┬───────────┘
+                │  /api/training/runs  │             │
+                └────────┬─────────────┘             │
+                         │                            │
+        ┌────────────────┼──────────────────┐ ┌──────┴──────┐
+        ▼                ▼                  ▼ ▼             ▼
+  ┌──────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+  │ Measurement  │  │ Predictor   │  │ Repositories│  │  Multi-view │
+  │   lookup     │──│ (sheet-first│──│ (SQLAlchemy)│  │   network   │
+  │  + dual rule │  │  authoritat-│  └──────┬──────┘  └──────┬──────┘
+  └──────┬───────┘  │   ive)      │         │                │
+         │          └─────────────┘         ▼                ▼
+         ▼                          ┌─────────────────────────────────┐
+  ┌──────────────┐                  │           PostgreSQL            │
+  │  Consolidated│                  │  patients · classifications     │
+  │   sheet xlsx │                  │  measurements · training_runs   │
+  └──────────────┘                  └─────────────────────────────────┘
 ```
 
-### Model role (honest description)
+### Model role (honest)
 
 The network is **not** the classifier for the core deliverable. The
-deterministic rule is. The network's verified, value-adding roles are:
+deterministic rule is. The network's value-adding roles are:
 
-- **Image → measurement estimation** — an assistive pre-fill when no
-  measurement is supplied (approximate; flagged non-authoritative).
+- **Image → measurement estimation** — used only as a flagged assistive
+  pre-fill when a patient is absent from the consolidated records.
 - **Generative insole-config head** — class-conditional insole
   recommendation.
 
-```
-   Lateral ─┐
-   Top  ────┼─► [ViewEncoder × 3]
-   Back ────┘        │
-                     ▼
-              MultiModalFusion ──► fused embedding ──┬─► measurements_hat (5)
-                     ▲                               ├─► insole_config (5)
-   Measurements ─────┘                               └─► logits (assistive only)
-   (+ mask)
-```
-
 The estimated-path classification is computed by applying the same
 arch-height rule to the model's *estimated* arch height — never taken
-directly from `logits`, which diagnostics showed are unreliable for this
-data.
+directly from network logits, which diagnostics showed are unreliable
+for this data.
 
 ---
 
@@ -125,11 +109,9 @@ curl http://localhost:8000/api/health    # expect "model_loaded": true
 python -m app.main
 ```
 
-> **Important:** unlike the original design, the system **does not** fall
-> back to random weights. If no trained checkpoint is present the
-> Predictor raises `NoTrainedModelError` rather than silently producing
-> garbage. Ensure `backend/model/checkpoints/best.pt` exists (training
-> writes it; it is retained, not renamed away).
+> **Note:** if no trained checkpoint is present, the Predictor raises
+> `NoTrainedModelError` rather than silently producing garbage. Ensure
+> `backend/model/checkpoints/best.pt` exists.
 
 ### Train (only needed for the estimator / insole head)
 
@@ -143,9 +125,9 @@ docker compose exec backend python scripts/verify_dataset.py
 docker compose exec backend python scripts/train.py --epochs 50
 ```
 
-Training is **not required** for the core (measured) classification — that
-path is a deterministic rule. Train only to improve the assistive
-estimator and the insole-config head.
+Training is **not required** for the core classification — that path is
+a deterministic rule. Train only to improve the assistive estimator and
+the insole-config head.
 
 ### Build a standalone `.exe` (Windows)
 
@@ -155,27 +137,23 @@ python app/build_exe.py        # -> dist/InsoleFootClassification/
 ```
 
 The hardened build script verifies a checkpoint exists, confirms the
-binary was produced, and bundles `best.pt` so first launch works.
+binary was produced, and bundles `best.pt`.
 
 ---
 
 ## Verification & diagnostics (reproducible)
 
-These scripts are permanent parts of the codebase. They exist so that any
-claim about the system can be independently re-checked — a discipline
-adopted after early development produced several misleading "100%"
-results.
+Permanent parts of the codebase. Any claim about the system can be
+re-checked independently.
 
 ```bash
-# Dataset soundness: class balance, view coverage, patient-leakage check
+# Dataset soundness
 docker compose exec backend python scripts/verify_dataset.py
 
-# Model characterisation: confusion matrix + the
-# measured / image-only / measurement-only accuracy decomposition
+# Model characterisation: the measured / image-only / measurement-only
+# accuracy decomposition
 docker compose exec backend python scripts/diagnose_model.py
 ```
-
-Expected headline results (held-out split):
 
 | Probe | Accuracy |
 |---|---|
@@ -188,61 +166,37 @@ classification is exposed only as an assistive, flagged path.
 
 ---
 
-## Project layout
+## Environment requirements
 
 ```
-insole-foot-classification/
-├── app/                                # PySide6 desktop GUI
-│   ├── main.py                         # Entry point
-│   ├── build_exe.py                    # Hardened PyInstaller packager
-│   └── ui/
-│       ├── tabs/                       # classification_tab, training_tab
-│       ├── widgets/                    # dropzone, measurement_panel,
-│       │                               #   results_panel (provenance banner)
-│       ├── workers/                    # inference + training QThreads
-│       └── theme/
-│
-├── backend/
-│   ├── model/
-│   │   ├── config.py                   # CLASS_NAMES, ARCH_HEIGHT_BANDS
-│   │   ├── architectures/              # encoders, fusion, VAE, heads
-│   │   ├── data/
-│   │   │   ├── dataset.py              # multi-sheet consolidation,
-│   │   │   │                           #   mm→cm, measurement-derived labels
-│   │   │   ├── transforms.py
-│   │   │   └── dataloader.py           # stratified split + safe sampler
-│   │   ├── training/                   # losses, metrics, trainer
-│   │   ├── inference/
-│   │   │   └── predictor.py            # MEASUREMENT-FIRST; no random fallback
-│   │   └── utils/checkpoint.py         # best.pt-priority selector
-│   │
-│   ├── database/                       # SQLAlchemy + Alembic + Pydantic
-│   │   ├── connection.py               # SA 2.0 text()-safe
-│   │   ├── schemas.py                  # + classification_source
-│   │   └── repositories/
-│   │
-│   └── server/                         # FastAPI
-│       └── routes/                     # health, classification, training,
-│                                       #   data_router, patients
-│
-├── data/
-│   ├── Heel/  Flat/  Normal/  Sheet/   # images by cohort + measurement xlsx
-│   └── README.md
-│
-├── docker/                             # Dockerfile.backend (+trainer),
-│                                       #   postgres-init.sql
-├── scripts/
-│   ├── verify_dataset.py               # RUN BEFORE TRAINING
-│   ├── diagnose_model.py               # reproduces the evidence
-│   ├── train.py  predict.py  prepare_data.py  seed_demo_data.py
-│   └── export_onnx.py
-│
-├── docker-compose.yml                  # db + backend + trainer + pgadmin
-│                                       #   (shm_size 4gb; INSOLE_FORCE_WORKERS=0)
-├── alembic.ini  pyproject.toml
-├── requirements.txt  .env.example  .gitignore
-└── README.md
+Python      3.11 – 3.13
+PySide6     >=6.10, <6.11   (pinned: 6.11.x has a QLabel regression that
+                             breaks GUI image previews)
+torch       >=2.5
+torchvision >=0.20
+Docker      Desktop (WSL2 backend on Windows)
 ```
+
+See `requirements.txt` for the full list. The PySide6 upper bound is
+load-bearing — without it, a fresh venv install will pull 6.11.x and
+the GUI image dropzones will not render uploaded images.
+
+---
+
+## Known limitations & quirks
+
+- **Image-only classification is unreliable** for this dataset because
+  arch height is not visually encoded in the supplied views. It is
+  exposed only as an assistive, clearly-flagged estimate.
+- **Estimated measurements are approximate** and must be confirmed by
+  consulting the consolidated records before use.
+- **Clear-button reload (cosmetic UX):** clicking *Clear* between
+  patients leaves the image drop-zones unable to render the next set
+  of images. Classification is unaffected (sheet lookup is keyed on
+  patient code, not images). Workaround: close and relaunch the
+  application between patients instead of using Clear.
+- Class boundaries follow the project's fixed bands; changing them
+  requires a central configuration change in `backend/model/config.py`.
 
 ---
 
@@ -251,22 +205,64 @@ insole-foot-classification/
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/health` | GET | Liveness + `model_loaded` + DB status |
-| `/api/classify` | POST | Multipart: optional images + `measurements_json`; returns class, **`classification_source`** (`measured`/`image_estimated`), probabilities, estimated measurements, insole config |
-| `/api/training/runs` | POST | Start a training run (threaded in backend) |
-| `/api/training/runs` | GET | List recent runs |
-| `/api/training/runs/{id}` | GET | Run status + live per-epoch history |
+| `/api/classify` | POST | Multipart: optional images + `patient_code`; returns class, **`classification_source`** (`sheet`/`image_estimated`), `arch_class`, `heel_class`, `rules_agree`, per-class probabilities, measurements, insole config |
+| `/api/training/runs` | POST | Start a training run |
 | `/api/data/summary` | GET | Scan `data/` and report counts |
-| `/api/patients` | POST/GET | Patient records |
 
 Swagger UI at `http://localhost:8000/docs`.
 
 ---
 
+## Project layout
+
+```
+project/
+├── app/                              # PySide6 desktop GUI
+│   ├── main.py                       # Entry point
+│   ├── build_exe.py                  # Hardened PyInstaller packager
+│   └── ui/
+│       ├── tabs/                     # classification_tab, training_tab
+│       ├── widgets/                  # dropzone, results_panel, ...
+│       ├── workers/                  # inference + training QThreads
+│       └── theme/
+│
+├── backend/
+│   ├── model/
+│   │   ├── config.py                 # CLASS_NAMES, ARCH_HEIGHT_BANDS
+│   │   ├── architectures/
+│   │   ├── data/
+│   │   │   ├── dataset.py
+│   │   │   ├── measurement_lookup.py # Sheet lookup + dual-rule logic
+│   │   │   └── transforms.py
+│   │   ├── training/
+│   │   ├── inference/
+│   │   │   └── predictor.py          # SHEET-LOOKUP-FIRST
+│   │   └── utils/checkpoint.py
+│   ├── database/                     # SQLAlchemy + Alembic + Pydantic
+│   └── server/                       # FastAPI
+│
+├── data/
+│   ├── Heel/  Flat/  Normal/         # images by cohort
+│   └── Sheet/measurements_consolidated.xlsx   # AUTHORITATIVE source
+│
+├── docker/                           # Dockerfile.backend (+trainer)
+├── scripts/
+│   ├── verify_dataset.py
+│   ├── diagnose_model.py
+│   ├── train.py  predict.py
+│   └── ...
+├── docker-compose.yml
+├── requirements.txt
+└── README.md
+```
+
+---
+
 ## Database
 
-Tables: `patients` (by patient code, e.g. `P1097`), `classifications`
-(one row per inference, includes the provenance flag), `measurements`,
-`training_runs` (full audit trail). Migrations via Alembic.
+Tables: `patients` (by patient code, e.g. `P014`), `classifications`
+(one row per inference, includes provenance + rule outcomes),
+`measurements`, `training_runs`. Migrations via Alembic.
 
 ```bash
 docker compose up -d db
@@ -275,45 +271,13 @@ docker compose exec backend alembic upgrade head
 
 ---
 
-## Configuration
-
-Runtime config via environment variables (see `.env.example`):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `DATABASE_URL` | derived from `POSTGRES_*` | SQLAlchemy DSN |
-| `POSTGRES_PORT` | `5432` | Host port (set `5433` if 5432 is in use) |
-| `API_PORT` | `8000` | FastAPI port |
-| `DATA_DIR` | `/workspace/data` | Dataset root (in container) |
-| `DEFAULT_CHECKPOINT_PATH` | `backend/model/checkpoints/best.pt` | Loaded at startup |
-| `INSOLE_FORCE_WORKERS` | `0` | DataLoader workers (0 in containers) |
-
-A single configurable knob, `ARCH_HEIGHT_MM_TO_CM` in
-`backend/model/data/dataset.py`, controls the millimetre→centimetre
-conversion for measurement sheets. Change it only if a cohort is
-confirmed to use a different unit.
-
----
-
-## Known limitations (verified, documented)
-
-- **Image-only classification is unreliable** for this dataset because
-  arch height is not visually encoded in the supplied views. It is
-  exposed only as an assistive, clearly-flagged estimate.
-- **Estimated measurements are approximate** and must be confirmed by a
-  clinical measurement before use.
-- Class boundaries follow the project's fixed arch-height bands; changing
-  them requires a central configuration change.
-
----
-
 ## Confidentiality
 
 Per the project agreement, the dataset, trained checkpoints, and outputs
-are **confidential and remain the property of the project owner**. The
-`.gitignore` excludes `data/Heel/*`, `data/Flat/*`, `data/Normal/*`,
-`data/Sheet/*`, and `backend/model/checkpoints/*.pt`. Do not push data or
-trained models to any external or public registry.
+are **confidential and remain the property of the project owner**.
+`.gitignore` excludes the image folders, the consolidated sheet, and
+trained checkpoints. Do not push data or trained models to any external
+or public registry.
 
 ---
 
