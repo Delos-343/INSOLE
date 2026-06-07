@@ -83,12 +83,16 @@ class Predictor:
         self.checkpoint_path: Path | None = None
 
         model_cfg, weights = self._load_weights()
-        # Inference loads trained weights from the checkpoint; never download ImageNet.
-        if hasattr(model_cfg, "pretrained"):
-            model_cfg.pretrained = False
+        # At inference the trained checkpoint already contains the backbone
+        # weights, so we must NOT let timm download ImageNet weights. The
+        # download writes a progress bar to sys.stderr, which is None in a
+        # windowed (--noconsole) PyInstaller build and crashes with
+        # "'NoneType' object has no attribute 'write'". Disabling pretrained
+        # here removes the download entirely; load_state_dict below supplies
+        # the real trained weights.
+        model_cfg.pretrained = False
         self.model_cfg = model_cfg
         self.model = build_classifier(model_cfg).to(self.device)
-        
         missing, unexpected = self.model.load_state_dict(weights, strict=False)
         if (len(weights) - len(unexpected)) == 0:
             raise NoTrainedModelError(
