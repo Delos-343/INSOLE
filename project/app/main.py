@@ -2,6 +2,8 @@
 Application entry point — `python -m app.main` or the bundled exe.
 """
 
+import app.bootstrap_streams  # noqa: F401  -- MUST be first, before any heavy import
+
 from __future__ import annotations
 
 import sys
