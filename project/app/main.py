@@ -2,9 +2,9 @@
 Application entry point — `python -m app.main` or the bundled exe.
 """
 
-import app.bootstrap_streams  # noqa: F401  -- MUST be first, before any heavy import
+from __future__ import annotations   # <-- MUST be the first statement (after docstring)
 
-from __future__ import annotations
+import app.bootstrap_streams  # noqa: F401  -- before torch/timm/PySide6
 
 import sys
 
