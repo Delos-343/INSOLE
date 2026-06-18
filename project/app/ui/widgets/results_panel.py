@@ -228,36 +228,6 @@ class ResultsPanel(QFrame):
             ml.addWidget(rw)
         b.addWidget(self.meas_box)
 
-        # --- Insole config ---
-        ib = QGroupBox("Recommended insole configuration")
-        ib.setStyleSheet(_groupbox_qss())
-        il = QVBoxLayout(ib)
-        il.setContentsMargins(GROUP_SIDE, GROUP_TOP, GROUP_SIDE, GROUP_BOTTOM)
-        il.setSpacing(0)
-        self.insole_rows = {}
-        for k, lbl in [
-            ("arch_support_height", "Arch support height"),
-            ("heel_cup_depth", "Heel cup depth"),
-            ("medial_post_strength", "Medial post strength"),
-            ("lateral_wedge_strength", "Lateral wedge strength"),
-            ("forefoot_cushioning", "Forefoot cushioning"),
-        ]:
-            rw, r = _row()
-            a = QLabel(lbl)
-            a.setMinimumWidth(170)
-            a.setStyleSheet(
-                f"color:{P.text_secondary};font-size:12px;background:transparent;"
-            )
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setTextVisible(False)
-            bar.setFixedHeight(6)
-            r.addWidget(a)
-            r.addWidget(bar, 1)
-            il.addWidget(rw)
-            self.insole_rows[k] = bar
-        b.addWidget(ib)
-
         self.notes = QLabel("")
         self.notes.setWordWrap(True)
         self.notes.setStyleSheet(
@@ -294,8 +264,6 @@ class ResultsPanel(QFrame):
             v.setText("0.0%")
         for v in self.meas_labels.values():
             v.setText("—")
-        for bar in self.insole_rows.values():
-            bar.setValue(0)
         self.notes.setText("")
 
     def set_result(self, r: dict):
@@ -379,10 +347,6 @@ class ResultsPanel(QFrame):
                 val_lbl.setText(f"{float(used[k]):.2f} {unit}{tag}")
             else:
                 val_lbl.setText(f"— {unit}")
-
-        insole = r.get("insole_configuration") or {}
-        for k, bar in self.insole_rows.items():
-            bar.setValue(int(round(float(insole.get(k, 0.0))*100)))
 
         notes = r.get("notes") or []
         # Blank line between bullets so multi-note results read as
